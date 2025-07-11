@@ -38,12 +38,12 @@ defmodule Cluster.Strategy do
     {connect_mod, connect_fun, connect_args} = connect
     {list_mod, list_fun, list_args} = list_nodes
     ensure_exported!(list_mod, list_fun, length(list_args))
-    current_node = Node.self()
+    current_node = :partisan.node_spec()
 
     need_connect =
       nodes
       |> difference(apply(list_mod, list_fun, list_args))
-      |> Enum.reject(fn n -> current_node == n end)
+      |> Enum.reject(fn n -> current_node.name == n.name end)
 
     bad_nodes =
       Enum.reduce(need_connect, [], fn n, acc ->
@@ -62,7 +62,15 @@ defmodule Cluster.Strategy do
 
             Cluster.Logger.info(topology, "connected to #{inspect(n)}")
             acc
+          :ok ->
+            :telemetry.execute(
+              [:libcluster, :connect_node, :ok],
+              %{duration: System.monotonic_time() - start},
+              %{node: n, topology: topology}
+            )
 
+            Cluster.Logger.info(topology, "connected to #{inspect(n)}")
+            acc
           false ->
             :telemetry.execute(
               [:libcluster, :connect_node, :error],
@@ -73,6 +81,19 @@ defmodule Cluster.Strategy do
             Cluster.Logger.warn(topology, "unable to connect to #{inspect(n)}")
             [{n, false} | acc]
 
+          {:error, reason} ->
+            :telemetry.execute(
+              [:libcluster, :connect_node, :error],
+              %{},
+              %{node: n, topology: topology, reason: inspect(reason)}
+            )
+
+            Cluster.Logger.warn(
+              topology,
+              "unable to connect to #{inspect(n)}: #{inspect(reason)}"
+            )
+
+            [{n, reason} | acc]
           :ignored ->
             :telemetry.execute(
               [:libcluster, :connect_node, :error],
@@ -108,12 +129,12 @@ defmodule Cluster.Strategy do
     {disconnect_mod, disconnect_fun, disconnect_args} = disconnect
     {list_mod, list_fun, list_args} = list_nodes
     ensure_exported!(list_mod, list_fun, length(list_args))
-    current_node = Node.self()
+    current_node = :partisan.node_spec()
 
     need_disconnect =
       nodes
       |> intersection(apply(list_mod, list_fun, list_args))
-      |> Enum.reject(fn n -> current_node == n end)
+      |> Enum.reject(fn n -> current_node == n.name end)
 
     bad_nodes =
       Enum.reduce(need_disconnect, [], fn n, acc ->

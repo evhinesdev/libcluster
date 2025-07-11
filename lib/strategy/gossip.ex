@@ -177,7 +177,7 @@ defmodule Cluster.Strategy.Gossip do
   @impl true
   def handle_info(:heartbeat, %State{meta: {multicast_addr, port, socket, _}} = state) do
     debug(state.topology, "heartbeat")
-    :gen_udp.send(socket, multicast_addr, port, heartbeat(node(), state))
+    :gen_udp.send(socket, multicast_addr, port, heartbeat(:partisan.node_spec(), state))
     Process.send_after(self(), :heartbeat, :rand.uniform(5_000))
     {:noreply, state}
   end
@@ -218,13 +218,13 @@ defmodule Cluster.Strategy.Gossip do
   end
 
   # Construct iodata representing packet to send
-  defp heartbeat(node_name, %State{meta: {_, _, _, secret}})
+  defp heartbeat(node_spec, %State{meta: {_, _, _, secret}})
        when is_nil(secret) do
-    ["heartbeat::", :erlang.term_to_binary(%{node: node_name})]
+    ["heartbeat::", :erlang.term_to_binary(%{node: node_spec})]
   end
 
-  defp heartbeat(node_name, %State{meta: {_, _, _, secret}} = state) when is_binary(secret) do
-    message = "heartbeat::" <> :erlang.term_to_binary(%{node: node_name})
+  defp heartbeat(node_spec, %State{meta: {_, _, _, secret}} = state) when is_binary(secret) do
+    message = "heartbeat::" <> :erlang.term_to_binary(%{node: node_spec})
     {:ok, iv, msg} = encrypt(state, message, secret)
 
     [iv, msg]
@@ -236,7 +236,7 @@ defmodule Cluster.Strategy.Gossip do
   # is different, and thus a node we can ignore
   @spec handle_heartbeat(State.t(), binary) :: :ok
   defp handle_heartbeat(%State{} = state, <<"heartbeat::", rest::binary>>) do
-    self = node()
+    self = :partisan.node_spec()
     connect = state.connect
     list_nodes = state.list_nodes
     topology = state.topology
@@ -245,9 +245,16 @@ defmodule Cluster.Strategy.Gossip do
       %{node: ^self} ->
         :ok
 
-      %{node: n} when is_atom(n) ->
-        debug(state.topology, "received heartbeat from #{n}")
-        Cluster.Strategy.connect_nodes(topology, connect, list_nodes, [n])
+      %{node: n}->
+        if n.name in :partisan.nodes() do
+          :ok
+        else
+          if length(:partisan.nodes()) > 1 do
+            :ok
+          else
+            Cluster.Strategy.connect_nodes(topology, connect, list_nodes, [n])
+          end
+        end
         :ok
 
       _ ->
